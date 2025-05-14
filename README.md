@@ -20,3 +20,44 @@ so Ill make this short on what the app is supposed to do once Im finished
 // this is it for now shout out to Philipp Lackner
 https://youtube.com/@philipplackner?si=1AbDJgCsgpg5LSfc
 he helped a lot when it came to Bluetooth implementation (for legal reasons i will not say more without my lawyer present)
+
+I setteled on this structure for the project:
+```
+/bluetoothapp
+│
+├── core/
+│   ├── BaseViewModel.kt
+│   ├── BluetoothRole.kt         ← Enum for MASTER / SLAVE
+│   ├── Command.kt               ← Data class for commands
+│   └── Result.kt                ← Sealed class for success/failure results
+│
+├── data/
+│   ├── bluetooth/
+│   │   ├── BluetoothManager.kt  ← Entry point to Android Bluetooth API
+│   │   ├── SlaveHandler.kt      ← Handles incoming commands & responds
+│   │   ├── MasterHandler.kt     ← Sends commands & processes replies
+│   │   └── BluetoothDeviceModel.kt
+│   ├── logger/
+│   │   ├── SensorLogger.kt
+│   │   └── FileLogger.kt
+│
+├── domain/
+│   ├── model/
+│   │   └── SensorData.kt
+│   ├── usecase/
+│   │   ├── StartAsMaster.kt
+│   │   ├── StartAsSlave.kt
+│   │   ├── SendCommand.kt
+│   │   ├── ReceiveCommand.kt
+│   │   └── LogSensorData.kt
+│
+├── presentation/
+│   ├── viewmodel/
+│   │   └── BluetoothViewModel.kt
+│   ├── ui/
+│   │   ├── StartupActivity.kt   ← Mode selection (Master/Slave)
+│   │   ├── MasterFragment.kt    ← View for master controls
+│   │   └── SlaveFragment.kt     ← View for responding/logging
+│
+└── App.kt
+```
