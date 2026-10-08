@@ -8,7 +8,9 @@ The default branch previously contained only the Android starter screen. Earlier
 
 - Android 9+ support, with runtime Bluetooth Connect permission on Android 12+.
 - System Bluetooth enable prompt and list of devices already paired in Android settings.
+- Explicit Master / Slave mode selection. Changing mode closes the old connection.
 - One Classic Bluetooth RFCOMM connection: connect as master or listen as slave.
+- Shortcut to system pairing settings; in-app discovery and bonding remain planned.
 - Send ASCII commands terminated by LF; receive LF or CRLF terminated ASCII data.
 - Handle fragmented incoming lines, end of stream, cancellation and connection failures.
 - Append timestamped incoming lines to private `received.log`; display the latest 100 lines.

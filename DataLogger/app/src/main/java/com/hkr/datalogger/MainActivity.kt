@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -17,6 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.hkr.datalogger.ui.theme.DataLoggerTheme
@@ -38,7 +40,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            var command by remember { mutableStateOf("") }
+            var command by rememberSaveable { mutableStateOf("") }
+            var role by rememberSaveable { mutableStateOf("MASTER") }
             DataLoggerTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
                     Column(Modifier.padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
@@ -46,11 +49,33 @@ class MainActivity : ComponentActivity() {
                         Text("Data Logger", style = MaterialTheme.typography.headlineMedium)
                         Text(status)
                         Button(onClick = { prepare() }) { Text("Enable / refresh Bluetooth") }
-                        Text("Pair the phones in Android settings first. Use Listen on the slave, then connect from the master.")
-                        Button(onClick = { session?.listen() }, enabled = ready && !connected) { Text("Listen as slave") }
-                        devices.forEach { (name, address) ->
-                            OutlinedButton(onClick = { session?.connect(address) }, enabled = ready && !connected) {
-                                Text("Connect to $name\n$address")
+                        Text("Mode: $role", style = MaterialTheme.typography.titleMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("MASTER", "SLAVE").forEach { choice ->
+                                OutlinedButton(onClick = {
+                                    if (role != choice) {
+                                        session?.disconnect()
+                                        connected = false
+                                        lines.clear()
+                                        command = ""
+                                        role = choice
+                                    }
+                                }, enabled = role != choice) { Text(choice) }
+                            }
+                        }
+                        Text(if (role == "MASTER") "Master connects to a paired slave and sends commands."
+                             else "Slave listens for the master. Sensor streaming will be added next.")
+                        OutlinedButton(onClick = { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) {
+                            Text("Open Bluetooth pairing settings")
+                        }
+                        Text("Pair the phones first. Return here and tap Enable / refresh Bluetooth.")
+                        if (role == "SLAVE") {
+                            Button(onClick = { session?.listen() }, enabled = ready && !connected) { Text("Listen for master") }
+                        } else {
+                            devices.forEach { (name, address) ->
+                                OutlinedButton(onClick = { session?.connect(address) }, enabled = ready && !connected) {
+                                    Text("Connect to $name\n$address")
+                                }
                             }
                         }
                         OutlinedButton(onClick = { session?.disconnect() }, enabled = session != null) { Text("Disconnect / stop listening") }
