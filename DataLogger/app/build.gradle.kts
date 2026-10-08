@@ -6,11 +6,11 @@ plugins {
 
 android {
     namespace = "com.hkr.datalogger"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.hkr.datalogger"
-        minSdk = 24
+        minSdk = 28
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"

@@ -1,63 +1,43 @@
 # DataLoggerApp
-My remake of the mobile Dev Project
-so Ill make this short on what the app is supposed to do once Im finished
-*features*
-* first connect to a bluetooth device
-* Master and slave implemented :
-  * i.e. master will send the slave commands and the slave will submit results or reply 
-  * initiation will be on the Master side
-* Slave will send data from the sensors
-* Master will have a list of commands (the requirement in the actaul app was RS232 so thats what Ill be running with Ill be sure to include a documentation regarding how the cmds work)
-* all this on android 9 and up meaning you have to implement proper checks for each API level from Pie (28) -> vanilla_ice_cream (35) [kinda makes sense, because you might want to use an old phone as a sensor not a $1200 mobile with the latest features to test temprature of a room or rotation in a plane]
-* alarm sound system
-* channels for different sensors
-* graphical interphase and proper visualization of data
 
-# for later in the project:
- it would be interesting to have a form of uploading this into the cloud and capturing the data from other devices
- another thing could be implementing this online from the computer or using the cellphone service PSTN, but before doing that we have to work more on cyber security since it wouldn't be very nice if a hacker was able to grab data from the censors using our application
- 
-// this is it for now shout out to Philipp Lackner
-https://youtube.com/@philipplackner?si=1AbDJgCsgpg5LSfc
-he helped a lot when it came to Bluetooth implementation (for legal reasons i will not say more without my lawyer present)
+Android Bluetooth data logger baseline, written in Kotlin with Jetpack Compose.
 
-I setteled on this structure for the project:
+The default branch previously contained only the Android starter screen. Earlier Bluetooth work is preserved in Git history before commit `8f1ba49` (which deleted the Bluetooth branch contents). The repair branch implements a new, limited baseline using the same service UUID as that earlier work.
+
+## Implemented
+
+- Android 9+ support, with runtime Bluetooth Connect permission on Android 12+.
+- System Bluetooth enable prompt and list of devices already paired in Android settings.
+- One Classic Bluetooth RFCOMM connection: connect as master or listen as slave.
+- Send ASCII commands terminated by LF; receive LF or CRLF terminated ASCII data.
+- Handle fragmented incoming lines, end of stream, cancellation and connection failures.
+- Append timestamped incoming lines to private `received.log`; display the latest 100 lines.
+- Close sockets and workers when the activity is destroyed. Rotation closes the connection; reconnect afterwards.
+
+This is a transport/logger baseline. Sensor acquisition, command interpretation, sensor channels, alarms, charts, CSV export and cloud upload are **not implemented**. Listening does not automatically generate sensor readings or reply to commands.
+
+## Build
+
+Open the **DataLogger** directory in Android Studio. Install Android SDK platform 35 and use JDK 17.
+
+```bash
+cd DataLogger
+./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 ```
-/bluetoothapp
-│
-├── core/
-│   ├── BaseViewModel.kt
-│   ├── BluetoothRole.kt         ← Enum for MASTER / SLAVE
-│   ├── Command.kt               ← Data class for commands
-│   └── Result.kt                ← Sealed class for success/failure results
-│
-├── data/
-│   ├── bluetooth/
-│   │   ├── BluetoothManager.kt  ← Entry point to Android Bluetooth API
-│   │   ├── SlaveHandler.kt      ← Handles incoming commands & responds
-│   │   ├── MasterHandler.kt     ← Sends commands & processes replies
-│   │   └── BluetoothDeviceModel.kt
-│   ├── logger/
-│   │   ├── SensorLogger.kt
-│   │   └── FileLogger.kt
-│
-├── domain/
-│   ├── model/
-│   │   └── SensorData.kt
-│   ├── usecase/
-│   │   ├── StartAsMaster.kt
-│   │   ├── StartAsSlave.kt
-│   │   ├── SendCommand.kt
-│   │   ├── ReceiveCommand.kt
-│   │   └── LogSensorData.kt
-│
-├── presentation/
-│   ├── viewmodel/
-│   │   └── BluetoothViewModel.kt
-│   ├── ui/
-│   │   ├── StartupActivity.kt   ← Mode selection (Master/Slave)
-│   │   ├── MasterFragment.kt    ← View for master controls
-│   │   └── SlaveFragment.kt     ← View for responding/logging
-│
-└── App.kt
-```
+
+The GitHub Actions workflow runs these checks and uploads a debug APK.
+
+## Two-phone smoke test
+
+1. Install the same debug APK on two phones supporting Classic Bluetooth. Pair them through Android settings.
+2. Open the app on each phone, grant the requested permission and enable Bluetooth.
+3. On the slave, tap **Listen as slave**. On the master, select the paired slave. Both should show **Connected**.
+4. Send `PING` from the master. The slave should display `PING`. Send a reply from the slave and verify it on the master.
+5. Disconnect while listening, connecting, or receiving. Verify the UI returns to Disconnected and a new connection can be started.
+6. Deny permission and retry using **Enable / refresh Bluetooth**. Also test a disabled adapter and an unavailable peer.
+
+Service UUID: `c61467fb-8db7-4793-b5bb-42cfacb0184e`. Both endpoints must use this UUID. This does not implement BLE or general-purpose RS232/SPP compatibility. Commands use printable ASCII; incoming lines are capped at 8192 bytes. Unterminated partial lines are discarded on disconnect. Log files remain private to the app and are removed when app data is cleared.
+
+Local validation in the repair environment: whitespace checks pass, but Gradle could not download its distribution due to restricted network access. An Android build and physical Bluetooth tests are required before calling this hardware-verified.
+
+Bluetooth implementation inspiration: [Philipp Lackner](https://youtube.com/@philipplackner).
