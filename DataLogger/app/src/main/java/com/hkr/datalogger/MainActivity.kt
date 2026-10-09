@@ -46,6 +46,11 @@ class MainActivity : ComponentActivity() {
         pendingAddress = null
         status = "Pairing timed out. Retry after completing or dismissing the system prompt."
     }
+    private lateinit var sensorCapture: SensorCapture
+    private var capturing by mutableStateOf(false)
+    private var sensorStatus by mutableStateOf("Sensor preview stopped")
+    private var sensorAvailability by mutableStateOf<List<String>>(emptyList())
+    private val sensorSamples = mutableStateMapOf<String, SensorSample>()
     private var receiverRegistered = false
     private val receiver = object : BroadcastReceiver() {
         @SuppressLint("MissingPermission")
@@ -105,6 +110,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         role = savedInstanceState?.getString("role") ?: "MASTER"
+        sensorCapture = SensorCapture(this) { sample -> sensorSamples[sample.channel] = sample }
+        sensorAvailability = sensorCapture.availability()
         enableEdgeToEdge()
         setContent {
             var command by rememberSaveable { mutableStateOf("") }
@@ -121,6 +128,7 @@ class MainActivity : ComponentActivity() {
                             listOf("MASTER", "SLAVE").forEach { choice ->
                                 OutlinedButton(onClick = {
                                     if (role != choice) {
+                                        stopSensors()
                                         cancelPending()
                                         stopDiscovery()
                                         session?.disconnect()
@@ -133,7 +141,7 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         Text(if (role == "MASTER") "Master connects to a paired slave and sends commands."
-                             else "Slave listens for the master. Sensor streaming will be added next.")
+                             else "Slave listens for the master and can preview local sensors.")
                         OutlinedButton(onClick = { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) {
                             Text("Open Bluetooth pairing settings")
                         }
@@ -149,6 +157,23 @@ class MainActivity : ComponentActivity() {
                                     Text("Pair / connect to $name\n$address")
                                 }
                             }
+                        }
+                        if (role == "SLAVE") {
+                            Text("Local sensor preview", style = MaterialTheme.typography.titleMedium)
+                            sensorAvailability.forEach { Text(it) }
+                            Text(sensorStatus)
+                            Button(onClick = {
+                                sensorSamples.clear()
+                                val registered = sensorCapture.start()
+                                capturing = sensorCapture.running
+                                sensorStatus = if (capturing) "Previewing: ${registered.joinToString()} (up to 10 Hz per sensor)"
+                                    else "No sensor listeners could be registered"
+                            }, enabled = !capturing) { Text("Start sensor preview") }
+                            OutlinedButton(onClick = { stopSensors() }, enabled = capturing) { Text("Stop sensor preview") }
+                            sensorSamples.values.sortedBy { it.channel }.forEach { sample ->
+                                Text("${sample.channel}: ${sample.values.joinToString()} ${sample.units} • #${sample.sequence}")
+                            }
+                            Text("Preview stays on this phone. Bluetooth sensor transmission is the next stage.")
                         }
                         OutlinedButton(onClick = { cancelPending(); stopDiscovery(); session?.disconnect() }, enabled = session != null) { Text("Disconnect / stop listening") }
                         OutlinedTextField(value = command, onValueChange = { command = it }, label = { Text("ASCII command") }, singleLine = true)
@@ -212,7 +237,7 @@ class MainActivity : ComponentActivity() {
         if (!allowed() || !scanAllowed()) {
             scanAfterPermission = true
             permission.launch(if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
-                else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
+                else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
             return
         }
         if (!ready || connected || role != "MASTER") return
@@ -266,12 +291,20 @@ class MainActivity : ComponentActivity() {
         super.onSaveInstanceState(outState)
     }
 
+    private fun stopSensors() {
+        sensorCapture.stop()
+        capturing = false
+        sensorStatus = "Sensor preview stopped"
+    }
+
     override fun onStop() {
+        stopSensors()
         stopDiscovery()
         super.onStop()
     }
 
     override fun onDestroy() {
+        stopSensors()
         cancelPending()
         stopDiscovery()
         if (receiverRegistered) unregisterReceiver(receiver)

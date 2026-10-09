@@ -16,6 +16,8 @@ Day 2 implementation: discovery, discoverability prompt, permissions, bond gatin
 
 Capture available accelerometer, gyroscope and light readings on the slave. Report unsupported sensors explicitly; do not invent temperature/humidity data. Add typed sensor samples with channel, units, values, timestamps and sequence numbers. Register/unregister sensor listeners with lifecycle and streaming state; limit sample rates. Add local slave previews and meaningful protocol/sensor-model tests.
 
+Day 3 brought forward on October 9: local sensor preview, availability reporting, typed samples, per-channel 10 Hz cap and foreground/role cleanup implemented. Transmission remains Day 4. Also repaired Day 2 lint failure by declaring and requesting legacy coarse/fine location together. Device sensor validation remains pending.
+
 ## Day 4 — October 11: master-controlled transmission
 
 Implement role handshake and documented LIST_SENSORS / START / STOP commands with replies and errors. Slave sends framed samples; master validates, displays and logs them. Rate-limit and bound outgoing buffers to avoid slow-peer memory growth. Stop sensor capture and queued transmission on disconnect or mode change. Test split frames, malformed input, unknown commands and reconnects. Use a documented protocol, not an unverified claim of RS232 compatibility.
