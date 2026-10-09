@@ -7,10 +7,12 @@ The default branch previously contained only the Android starter screen. Earlier
 ## Implemented
 
 - Android 9+ support, with runtime Bluetooth Connect permission on Android 12+.
-- System Bluetooth enable prompt and list of devices already paired in Android settings.
+- System Bluetooth enable prompt, paired devices and in-app nearby Classic Bluetooth discovery.
 - Explicit Master / Slave mode selection. Changing mode closes the old connection.
 - One Classic Bluetooth RFCOMM connection: connect as master or listen as slave.
-- Shortcut to system pairing settings; in-app discovery and bonding remain planned.
+- In-app pairing before connection, bond-state tracking and a 60-second wait timeout. Android keeps control of pairing confirmations.
+- Slave discoverability through a 120-second system prompt; Scan/Connect permissions on Android 12+, location for discovery on Android 9–11.
+- Discovery stops before connection and when leaving the app; receivers and pending connection intents are cleaned up on destruction. System bonds are not removed.
 - Send ASCII commands terminated by LF; receive LF or CRLF terminated ASCII data.
 - Handle fragmented incoming lines, end of stream, cancellation and connection failures.
 - Append timestamped incoming lines to private `received.log`; display the latest 100 lines.
@@ -31,15 +33,16 @@ The GitHub Actions workflow runs these checks and uploads a debug APK.
 
 ## Two-phone smoke test
 
-1. Install the same debug APK on two phones supporting Classic Bluetooth. Pair them through Android settings.
+1. Install the same debug APK on two phones supporting Classic Bluetooth. For a fresh-pairing test, remove any previous bond using Android settings.
 2. Open the app on each phone, grant the requested permission and enable Bluetooth.
-3. On the slave, tap **Listen as slave**. On the master, select the paired slave. Both should show **Connected**.
+3. Select **SLAVE**, tap **Listen for master**, then **Make discoverable (120 seconds)** and accept the system prompt. Select **MASTER** on the other phone, tap **Find nearby devices**, grant discovery permission, then **Pair / connect** to the slave. Confirm the system pairing prompt on both phones. Connection starts only after the bond completes. Both should show **Connected**.
 4. Send `PING` from the master. The slave should display `PING`. Send a reply from the slave and verify it on the master.
 5. Disconnect while listening, connecting, or receiving. Verify the UI returns to Disconnected and a new connection can be started.
-6. Deny permission and retry using **Enable / refresh Bluetooth**. Also test a disabled adapter and an unavailable peer.
+6. Deny Connect/Scan/location permissions and retry. Test Bluetooth off, Android 9–11 Location off, a pairing refusal, a 60-second timeout, switching roles while pairing, leaving the app during discovery, and reconnecting to an already bonded peer. After a timeout or role change, a late bond must not automatically connect; tap the device again.
+7. Rotate or close the app during pairing and verify the old activity does not connect later. Confirm discovery ends and a fresh scan works.
 
 Service UUID: `c61467fb-8db7-4793-b5bb-42cfacb0184e`. Both endpoints must use this UUID. This does not implement BLE or general-purpose RS232/SPP compatibility. Commands use printable ASCII; incoming lines are capped at 8192 bytes. Unterminated partial lines are discarded on disconnect. Log files remain private to the app and are removed when app data is cleared.
 
-Local validation in the repair environment: whitespace checks pass, but Gradle could not download its distribution due to restricted network access. An Android build and physical Bluetooth tests are required before calling this hardware-verified.
+Day 1 CI passed assembleDebug, testDebugUnitTest and lintDebug. Day 2 local Gradle execution is blocked by restricted distribution downloads; use the latest PR CI run for Android validation. The two-phone checks above remain unperformed and are required for hardware verification.
 
 Bluetooth implementation inspiration: [Philipp Lackner](https://youtube.com/@philipplackner).

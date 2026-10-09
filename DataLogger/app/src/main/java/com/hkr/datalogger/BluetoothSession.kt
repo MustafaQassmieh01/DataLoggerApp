@@ -1,5 +1,9 @@
 package com.hkr.datalogger
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import android.bluetooth.BluetoothDevice
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothServerSocket
@@ -31,7 +35,15 @@ class BluetoothSession(context: Context, private val adapter: BluetoothAdapter,
     }
 
     fun connect(address: String) = start { id ->
-        val candidate = adapter.getRemoteDevice(address).createRfcommSocketToServiceRecord(SERVICE_UUID)
+        val device = adapter.getRemoteDevice(address)
+        if (device.bondState != BluetoothDevice.BOND_BONDED) {
+            publish(id, "Pair the device before connecting")
+            return@start
+        }
+        if (Build.VERSION.SDK_INT < 31 || appContext.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED) {
+            adapter.cancelDiscovery()
+        }
+        val candidate = device.createRfcommSocketToServiceRecord(SERVICE_UUID)
         synchronized(lock) {
             if (generation != id || closed) { candidate.close(); return@start }
             socket = candidate

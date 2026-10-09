@@ -10,6 +10,8 @@ Add explicit Master / Slave UI selection, disconnect on mode changes, and a shor
 
 Implement in-app Classic Bluetooth discovery, slave discoverability via the Android system prompt, and bond-state tracking. Request Scan/Connect on Android 12+ and location permission for discovery on Android 9–11. Use `createBond()` and connect only after BOND_BONDED; handle refusal, cancellation and timeout. Cancel discovery before RFCOMM connection, unregister receivers, and keep all system pairing confirmations visible.
 
+Day 2 implementation: discovery, discoverability prompt, permissions, bond gating and timeout added. System pairing confirmation is preserved. Local Gradle downloads remain blocked; validate via PR CI. Physical checklist is in README. Day 1 CI run 37730441991 passed all Android checks.
+
 ## Day 3 — October 10: real sensor collection
 
 Capture available accelerometer, gyroscope and light readings on the slave. Report unsupported sensors explicitly; do not invent temperature/humidity data. Add typed sensor samples with channel, units, values, timestamps and sequence numbers. Register/unregister sensor listeners with lifecycle and streaming state; limit sample rates. Add local slave previews and meaningful protocol/sensor-model tests.

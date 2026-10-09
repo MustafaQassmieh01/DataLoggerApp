@@ -4,6 +4,13 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothDevice
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import android.os.Handler
+import android.os.Looper
+import androidx.core.content.ContextCompat
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -30,18 +37,78 @@ class MainActivity : ComponentActivity() {
     private var devices by mutableStateOf<List<Pair<String, String>>>(emptyList())
     private val lines = mutableStateListOf<String>()
     private var session: BluetoothSession? = null
+    private var role by mutableStateOf("MASTER")
+    private var discovering by mutableStateOf(false)
+    private var pendingAddress by mutableStateOf<String?>(null)
+    private var scanAfterPermission = false
+    private val main = Handler(Looper.getMainLooper())
+    private val pairingTimeout = Runnable {
+        pendingAddress = null
+        status = "Pairing timed out. Retry after completing or dismissing the system prompt."
+    }
+    private var receiverRegistered = false
+    private val receiver = object : BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
+        override fun onReceive(context: Context, intent: Intent) {
+            if (!allowed() && intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            when (intent.action) {
+                BluetoothDevice.ACTION_FOUND -> {
+                    val device = bluetoothDevice(intent) ?: return
+                    devices = (devices.filterNot { it.second == device.address } +
+                        ((device.name ?: "Unnamed device") to device.address)).sortedBy { it.first }
+                }
+                BluetoothAdapter.ACTION_DISCOVERY_STARTED -> discovering = true
+                BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> discovering = false
+                BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                    if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1) != BluetoothAdapter.STATE_ON) {
+                        cancelPending()
+                        ready = false
+                        connected = false
+                        discovering = false
+                        session?.disconnect()
+                        status = "Bluetooth is disabled"
+                    } else refresh()
+                }
+                BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
+                    val device = bluetoothDevice(intent) ?: return
+                    if (device.address != pendingAddress) return
+                    when (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.BOND_NONE)) {
+                        BluetoothDevice.BOND_BONDED -> {
+                            cancelPending()
+                            if (role == "MASTER" && ready) connectBonded(device)
+                        }
+                        BluetoothDevice.BOND_NONE -> {
+                            cancelPending()
+                            status = "Pairing refused or cancelled. Tap the device to retry."
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun bluetoothDevice(intent: Intent): BluetoothDevice? =
+        if (Build.VERSION.SDK_INT >= 33) intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
+        else intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
     private val adapter get() = getSystemService(BluetoothManager::class.java)?.adapter
     private val enable = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { refresh() }
-    private val permission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
-        if (it) prepare() else { ready = false; status = "Bluetooth permission denied; tap Enable / refresh to retry" }
+    private val permission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        if (allowed()) {
+            prepare()
+            if (scanAfterPermission && scanAllowed() && ready) discover()
+        } else { ready = false; status = "Bluetooth permission denied; tap Enable / refresh to retry" }
+        if (scanAfterPermission && !scanAllowed()) status = "Discovery permission denied; paired devices remain available"
+        scanAfterPermission = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        role = savedInstanceState?.getString("role") ?: "MASTER"
         enableEdgeToEdge()
         setContent {
             var command by rememberSaveable { mutableStateOf("") }
-            var role by rememberSaveable { mutableStateOf("MASTER") }
+
             DataLoggerTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
                     Column(Modifier.padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
@@ -54,6 +121,8 @@ class MainActivity : ComponentActivity() {
                             listOf("MASTER", "SLAVE").forEach { choice ->
                                 OutlinedButton(onClick = {
                                     if (role != choice) {
+                                        cancelPending()
+                                        stopDiscovery()
                                         session?.disconnect()
                                         connected = false
                                         lines.clear()
@@ -68,17 +137,20 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(onClick = { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) {
                             Text("Open Bluetooth pairing settings")
                         }
-                        Text("Pair the phones first. Return here and tap Enable / refresh Bluetooth.")
+                        Text("Keep both phones nearby. Android will ask you to confirm pairing.")
                         if (role == "SLAVE") {
+                            OutlinedButton(onClick = { makeDiscoverable() }, enabled = ready) { Text("Make discoverable (120 seconds)") }
                             Button(onClick = { session?.listen() }, enabled = ready && !connected) { Text("Listen for master") }
                         } else {
+                            Button(onClick = { discover() }, enabled = ready && !connected && pendingAddress == null && !discovering) { Text("Find nearby devices") }
+                            if (discovering) OutlinedButton(onClick = { stopDiscovery() }) { Text("Stop discovery") }
                             devices.forEach { (name, address) ->
-                                OutlinedButton(onClick = { session?.connect(address) }, enabled = ready && !connected) {
-                                    Text("Connect to $name\n$address")
+                                OutlinedButton(onClick = { pairAndConnect(address) }, enabled = ready && !connected && pendingAddress == null) {
+                                    Text("Pair / connect to $name\n$address")
                                 }
                             }
                         }
-                        OutlinedButton(onClick = { session?.disconnect() }, enabled = session != null) { Text("Disconnect / stop listening") }
+                        OutlinedButton(onClick = { cancelPending(); stopDiscovery(); session?.disconnect() }, enabled = session != null) { Text("Disconnect / stop listening") }
                         OutlinedTextField(value = command, onValueChange = { command = it }, label = { Text("ASCII command") }, singleLine = true)
                         Button(onClick = {
                             try { session?.send(command); command = "" }
@@ -91,6 +163,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        ContextCompat.registerReceiver(this, receiver, IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_STARTED)
+            addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
+            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+        }, ContextCompat.RECEIVER_EXPORTED)
+        receiverRegistered = true
         prepare()
     }
 
@@ -99,7 +179,7 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("MissingPermission")
     private fun prepare() {
-        if (!allowed()) { permission.launch(Manifest.permission.BLUETOOTH_CONNECT); return }
+        if (!allowed()) { permission.launch(arrayOf(Manifest.permission.BLUETOOTH_CONNECT)); return }
         val bluetooth = adapter
         if (bluetooth == null) { ready = false; status = "This device does not support Bluetooth"; return }
         if (!bluetooth.isEnabled) { ready = false; enable.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)); return }
@@ -120,11 +200,81 @@ class MainActivity : ComponentActivity() {
                 lines.add(line)
                 if (lines.size > 100) lines.removeAt(0)
             })
-            status = if (devices.isEmpty()) "No paired devices. Pair in Android settings." else "Ready"
+            status = if (devices.isEmpty()) "No paired devices. Find nearby devices to pair." else "Ready"
         }
     }
 
+    private fun scanAllowed() = checkSelfPermission(if (Build.VERSION.SDK_INT >= 31)
+        Manifest.permission.BLUETOOTH_SCAN else Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    @SuppressLint("MissingPermission")
+    private fun discover() {
+        if (!allowed() || !scanAllowed()) {
+            scanAfterPermission = true
+            permission.launch(if (Build.VERSION.SDK_INT >= 31) arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN)
+                else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
+            return
+        }
+        if (!ready || connected || role != "MASTER") return
+        stopDiscovery()
+        devices = adapter?.bondedDevices.orEmpty().map { (it.name ?: "Unnamed device") to it.address }
+        discovering = adapter?.startDiscovery() == true
+        status = if (discovering) "Searching for nearby devices…" else "Discovery could not start. On Android 9–11, enable Location in system settings."
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun stopDiscovery() {
+        if (Build.VERSION.SDK_INT < 31 || scanAllowed()) adapter?.cancelDiscovery()
+        discovering = false
+    }
+
+    private fun cancelPending() {
+        main.removeCallbacks(pairingTimeout)
+        pendingAddress = null
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun pairAndConnect(address: String) {
+        if (!allowed() || !ready || role != "MASTER" || connected || pendingAddress != null) return
+        stopDiscovery()
+        val device = adapter?.getRemoteDevice(address) ?: return
+        if (device.bondState == BluetoothDevice.BOND_BONDED) { connectBonded(device); return }
+        pendingAddress = address
+        status = "Confirm pairing with ${device.name ?: address} in Android's system prompt"
+        main.postDelayed(pairingTimeout, 60_000)
+        if (device.bondState != BluetoothDevice.BOND_BONDING && !device.createBond()) {
+            cancelPending()
+            status = "Pairing could not start. Retry or use Bluetooth settings."
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun connectBonded(device: BluetoothDevice) {
+        if (!allowed() || device.bondState != BluetoothDevice.BOND_BONDED) return
+        stopDiscovery()
+        session?.connect(device.address)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun makeDiscoverable() {
+        if (!allowed() || !ready || role != "SLAVE") return
+        enable.launch(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 120))
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("role", role)
+        super.onSaveInstanceState(outState)
+    }
+
+    override fun onStop() {
+        stopDiscovery()
+        super.onStop()
+    }
+
     override fun onDestroy() {
+        cancelPending()
+        stopDiscovery()
+        if (receiverRegistered) unregisterReceiver(receiver)
         session?.close()
         super.onDestroy()
     }
