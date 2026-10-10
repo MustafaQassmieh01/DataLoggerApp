@@ -22,6 +22,8 @@ Day 3 brought forward on October 9: local sensor preview, availability reporting
 
 Implement role handshake and documented LIST_SENSORS / START / STOP commands with replies and errors. Slave sends framed samples; master validates, displays and logs them. Rate-limit and bound outgoing buffers to avoid slow-peer memory growth. Stop sensor capture and queued transmission on disconnect or mode change. Test split frames, malformed input, unknown commands and reconnects. Use a documented protocol, not an unverified claim of RS232 compatibility.
 
+Day 4 implemented early on October 10: role/version handshake, LIST_SENSORS/START/STOP, real sensor frames and Master validation/display, bounded outgoing queue and disconnect/background cleanup. Added protocol and frame tests. Local Gradle bootstrap is network-blocked; CI and two-phone verification remain required.
+
 ## Day 5 — October 12: integration and verification
 
 Resolve build, unit-test and lint failures. Verify permission denial, Bluetooth off, pairing refusal, missing sensors, disconnects, repeated starts/stops and mode switches. Produce a debug APK when CI succeeds and a two-phone test checklist; clearly separate automated checks from hardware tests the user must perform. Update README and PR description to describe actual implemented behavior and remaining limitations.

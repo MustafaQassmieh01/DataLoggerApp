@@ -14,6 +14,10 @@ import android.os.Looper
 import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.RejectedExecutionException
 
 /** A single RFCOMM connection. Closing sockets also cancels blocking connect/read/accept. */
 @SuppressLint("MissingPermission")
@@ -23,7 +27,7 @@ class BluetoothSession(context: Context, private val adapter: BluetoothAdapter,
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
-    private val writer = Executors.newSingleThreadExecutor()
+    private val writer = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(64))
     private val lock = Any()
     private var generation = 0
     private var socket: BluetoothSocket? = null
@@ -89,22 +93,17 @@ class BluetoothSession(context: Context, private val adapter: BluetoothAdapter,
     private fun receive(id: Int, connection: BluetoothSocket) {
         publish(id, "Connected", true)
         val input = connection.inputStream
-        val line = StringBuilder()
+        val framer = AsciiLineFramer()
         while (true) {
             val byte = input.read()
             if (byte == -1) { publish(id, "Peer disconnected"); return }
-            if (byte > 127) throw IOException("Expected newline-delimited ASCII data")
-            if (byte == 10) {
-                val text = line.toString().removeSuffix("\r")
-                line.setLength(0)
+            val text = framer.accept(byte)
+            if (text != null) {
                 // File I/O stays on the worker, never the UI thread.
                 appContext.openFileOutput("received.log", Context.MODE_APPEND).use {
                     it.write("${System.currentTimeMillis()}\t$text\n".toByteArray(Charsets.UTF_8))
                 }
                 main.post { if (synchronized(lock) { !closed && generation == id }) onLine(text) }
-            } else {
-                if (line.length >= 8192) throw IOException("Incoming line exceeds 8192 bytes")
-                line.append(byte.toChar())
             }
         }
     }
@@ -113,7 +112,7 @@ class BluetoothSession(context: Context, private val adapter: BluetoothAdapter,
         require(text.length <= 8192 && text.all { it.code in 32..126 }) { "Use one ASCII command (max 8192 characters)" }
         val (id, connection) = synchronized(lock) { generation to socket }
         if (connection == null) { publish(id, "Connect before sending"); return }
-        writer.execute {
+        try { writer.execute {
             try {
                 synchronized(lock) { if (closed || id != generation) return@execute }
                 connection.outputStream.write("$text\n".toByteArray(Charsets.US_ASCII))
@@ -122,8 +121,12 @@ class BluetoothSession(context: Context, private val adapter: BluetoothAdapter,
                 synchronized(lock) { if (id == generation) closeSockets() }
                 publish(id, "Send failed: ${e.message}")
             }
+        } } catch (_: RejectedExecutionException) {
+            disconnect()
         }
     }
+
+    fun discardPendingWrites() { writer.queue.clear() }
 
     fun disconnect() {
         val id = synchronized(lock) { generation++; closeSockets(); generation }
@@ -131,6 +134,7 @@ class BluetoothSession(context: Context, private val adapter: BluetoothAdapter,
     }
 
     private fun closeSockets() {
+        writer.queue.clear()
         try { socket?.close() } catch (_: IOException) { }
         try { server?.close() } catch (_: IOException) { }
         socket = null

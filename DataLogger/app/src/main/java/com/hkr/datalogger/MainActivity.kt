@@ -51,6 +51,13 @@ class MainActivity : ComponentActivity() {
     private var sensorStatus by mutableStateOf("Sensor preview stopped")
     private var sensorAvailability by mutableStateOf<List<String>>(emptyList())
     private val sensorSamples = mutableStateMapOf<String, SensorSample>()
+    private var protocolReady by mutableStateOf(false)
+    private var streaming = false
+    private var foreground = false
+    private var lastRemoteSequence = 0L
+    private val handshakeTimeout = Runnable {
+        if (connected && !protocolReady) session?.disconnect()
+    }
     private var receiverRegistered = false
     private val receiver = object : BroadcastReceiver() {
         @SuppressLint("MissingPermission")
@@ -110,7 +117,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         role = savedInstanceState?.getString("role") ?: "MASTER"
-        sensorCapture = SensorCapture(this) { sample -> sensorSamples[sample.channel] = sample }
+        sensorCapture = SensorCapture(this) { sample ->
+            sensorSamples[sample.channel] = sample
+            if (streaming && connected && protocolReady && role == "SLAVE") session?.send(SensorProtocol.encode(sample))
+        }
         sensorAvailability = sensorCapture.availability()
         enableEdgeToEdge()
         setContent {
@@ -168,14 +178,25 @@ class MainActivity : ComponentActivity() {
                                 capturing = sensorCapture.running
                                 sensorStatus = if (capturing) "Previewing: ${registered.joinToString()} (up to 10 Hz per sensor)"
                                     else "No sensor listeners could be registered"
-                            }, enabled = !capturing) { Text("Start sensor preview") }
+                            }, enabled = !capturing && !streaming) { Text("Start sensor preview") }
                             OutlinedButton(onClick = { stopSensors() }, enabled = capturing) { Text("Stop sensor preview") }
                             sensorSamples.values.sortedBy { it.channel }.forEach { sample ->
                                 Text("${sample.channel}: ${sample.values.joinToString()} ${sample.units} • #${sample.sequence}")
                             }
-                            Text("Preview stays on this phone. Bluetooth sensor transmission is the next stage.")
+                            Text("Master START/STOP controls Bluetooth streaming while this app is foregrounded.")
                         }
-                        OutlinedButton(onClick = { cancelPending(); stopDiscovery(); session?.disconnect() }, enabled = session != null) { Text("Disconnect / stop listening") }
+                        if (role == "MASTER") {
+                            Text(if (protocolReady) "Slave protocol ready" else "Waiting for role handshake")
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf("LIST_SENSORS", "START", "STOP").forEach { cmd ->
+                                    Button(onClick = { session?.send(cmd) }, enabled = connected && protocolReady) { Text(cmd) }
+                                }
+                            }
+                            sensorSamples.values.sortedBy { it.channel }.forEach { sample ->
+                                Text("${sample.channel}: ${sample.values.joinToString()} ${sample.units} • #${sample.sequence}")
+                            }
+                        }
+                        OutlinedButton(onClick = { stopSensors(); cancelPending(); stopDiscovery(); session?.disconnect() }, enabled = session != null) { Text("Disconnect / stop listening") }
                         OutlinedTextField(value = command, onValueChange = { command = it }, label = { Text("ASCII command") }, singleLine = true)
                         Button(onClick = {
                             try { session?.send(command); command = "" }
@@ -221,7 +242,15 @@ class MainActivity : ComponentActivity() {
         if (session == null) {
             session = BluetoothSession(this, bluetooth, { message, isConnected ->
                 status = message; connected = isConnected
+                main.removeCallbacks(handshakeTimeout)
+                protocolReady = false
+                if (isConnected) {
+                    lastRemoteSequence = 0
+                    session?.send("HELLO 1 $role")
+                    main.postDelayed(handshakeTimeout, 10_000)
+                } else stopSensors()
             }, { line ->
+                handleProtocol(line)
                 lines.add(line)
                 if (lines.size > 100) lines.removeAt(0)
             })
@@ -291,14 +320,66 @@ class MainActivity : ComponentActivity() {
         super.onSaveInstanceState(outState)
     }
 
+    private fun handleProtocol(line: String) {
+        if (!connected) return
+        if (line.startsWith("HELLO")) {
+            val peer = if (role == "MASTER") "SLAVE" else "MASTER"
+            if (line != "HELLO 1 $peer" || protocolReady) {
+                session?.disconnect()
+                return
+            }
+            protocolReady = true
+            main.removeCallbacks(handshakeTimeout)
+            return
+        }
+        if (!protocolReady) { session?.disconnect(); return }
+        if (role == "MASTER") {
+            if (line.startsWith("SAMPLE")) {
+                val sample = SensorProtocol.decode(line)
+                if (sample == null || sample.sequence <= lastRemoteSequence) {
+                    status = "Rejected malformed or out-of-order sensor sample"
+                    return
+                }
+                lastRemoteSequence = sample.sequence
+                sensorSamples[sample.channel] = sample
+            } else if (line == "OK START") lastRemoteSequence = 0
+            return
+        }
+        when (line) {
+            "LIST_SENSORS" -> session?.send("SENSORS " + sensorCapture.availability().joinToString(";"))
+            "START" -> {
+                if (!foreground) { session?.send("ERROR BACKGROUND"); return }
+                if (!streaming) {
+                    val registered = sensorCapture.start()
+                    capturing = sensorCapture.running
+                    streaming = capturing
+                    sensorStatus = "Streaming: ${registered.joinToString()}"
+                }
+                session?.send(if (streaming) "OK START" else "ERROR NO_SENSORS")
+            }
+            "STOP" -> { stopSensors(); session?.send("OK STOP") }
+            else -> session?.send("ERROR UNKNOWN_COMMAND")
+        }
+    }
+
     private fun stopSensors() {
+        streaming = false
+        session?.discardPendingWrites()
         sensorCapture.stop()
         capturing = false
         sensorStatus = "Sensor preview stopped"
     }
 
+    override fun onStart() {
+        super.onStart()
+        foreground = true
+    }
+
     override fun onStop() {
+        foreground = false
+        val wasStreaming = streaming
         stopSensors()
+        if (wasStreaming && connected) session?.send("EVENT STOP BACKGROUND")
         stopDiscovery()
         super.onStop()
     }
@@ -306,6 +387,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         stopSensors()
         cancelPending()
+        main.removeCallbacks(handshakeTimeout)
         stopDiscovery()
         if (receiverRegistered) unregisterReceiver(receiver)
         session?.close()
