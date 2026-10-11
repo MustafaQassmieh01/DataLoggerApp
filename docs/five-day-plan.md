@@ -24,8 +24,12 @@ Implement role handshake and documented LIST_SENSORS / START / STOP commands wit
 
 Day 4 implemented early on October 10: role/version handshake, LIST_SENSORS/START/STOP, real sensor frames and Master validation/display, bounded outgoing queue and disconnect/background cleanup. Added protocol and frame tests. Local Gradle bootstrap is network-blocked; CI and two-phone verification remain required.
 
+Day 4 CI run 38032856580 passed assembleDebug, unit tests and lint. The workflow produced the debug APK artifact; physical verification remains separate.
+
 ## Day 5 — October 12: integration and verification
 
 Resolve build, unit-test and lint failures. Verify permission denial, Bluetooth off, pairing refusal, missing sensors, disconnects, repeated starts/stops and mode switches. Produce a debug APK when CI succeeds and a two-phone test checklist; clearly separate automated checks from hardware tests the user must perform. Update README and PR description to describe actual implemented behavior and remaining limitations.
+
+Day 5 integration started October 11: extracted connection-scoped remote sample validation and added tests for duplicates, out-of-order frames, malformed frames and sequence reset on a new stream/reconnect. Master now surfaces START, STOP, sensor-list, error and background-stop responses instead of leaving them only in the raw log.
 
 Continue the earliest unfinished prerequisite before moving to a later stage. Each stage ends with focused commits on the work branch, a brief progress report, CI status and a concrete next check. Preserve existing user changes and inspect remote branch head before publishing.

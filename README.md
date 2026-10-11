@@ -49,7 +49,7 @@ The GitHub Actions workflow runs these checks and uploads a debug APK.
 
 Service UUID: `c61467fb-8db7-4793-b5bb-42cfacb0184e`. Both endpoints must use this UUID. This does not implement BLE or general-purpose RS232/SPP compatibility. Commands use printable ASCII; incoming lines are capped at 8192 bytes. Unterminated partial lines are discarded on disconnect. Log files remain private to the app and are removed when app data is cleared.
 
-Sensor preview and permission repair passed CI run 37936122498 (assembleDebug, testDebugUnitTest and lintDebug). Transmission changes require a fresh CI run. The two-phone checks above remain unperformed and are required for hardware verification.
+Sensor preview and permission repair passed CI run 37936122498. Sensor transmission passed CI run 38032856580 (assembleDebug, unit tests and lintDebug) and produced the debug APK artifact. The two-phone checks above remain unperformed and are required for hardware verification.
 
 Bluetooth implementation inspiration: [Philipp Lackner](https://youtube.com/@philipplackner).
 

@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
     private var protocolReady by mutableStateOf(false)
     private var streaming = false
     private var foreground = false
-    private var lastRemoteSequence = 0L
+    private val remoteSamples = RemoteSampleValidator()
     private val handshakeTimeout = Runnable {
         if (connected && !protocolReady) session?.disconnect()
     }
@@ -245,7 +245,7 @@ class MainActivity : ComponentActivity() {
                 main.removeCallbacks(handshakeTimeout)
                 protocolReady = false
                 if (isConnected) {
-                    lastRemoteSequence = 0
+                    remoteSamples.reset()
                     session?.send("HELLO 1 $role")
                     main.postDelayed(handshakeTimeout, 10_000)
                 } else stopSensors()
@@ -335,14 +335,22 @@ class MainActivity : ComponentActivity() {
         if (!protocolReady) { session?.disconnect(); return }
         if (role == "MASTER") {
             if (line.startsWith("SAMPLE")) {
-                val sample = SensorProtocol.decode(line)
-                if (sample == null || sample.sequence <= lastRemoteSequence) {
+                val sample = remoteSamples.accept(line)
+                if (sample == null) {
                     status = "Rejected malformed or out-of-order sensor sample"
                     return
                 }
-                lastRemoteSequence = sample.sequence
                 sensorSamples[sample.channel] = sample
-            } else if (line == "OK START") lastRemoteSequence = 0
+            } else when {
+                line == "OK START" -> {
+                    remoteSamples.reset()
+                    status = "Slave sensor stream started"
+                }
+                line == "OK STOP" -> status = "Slave sensor stream stopped"
+                line.startsWith("SENSORS ") -> status = line
+                line.startsWith("ERROR ") -> status = "Slave: ${line.removePrefix("ERROR ")}"
+                line == "EVENT STOP BACKGROUND" -> status = "Slave stopped streaming in background"
+            }
             return
         }
         when (line) {
