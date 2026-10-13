@@ -27,4 +27,14 @@ class RemoteSampleValidatorTest {
         assertNull(validator.accept("SAMPLE 9 light lx 100 200 NaN"))
         assertNotNull(validator.accept(frame(1)))
     }
+    @Test fun peerSequencesAndResetsAreIndependent() {
+        val first = RemoteSampleValidator()
+        val second = RemoteSampleValidator()
+        assertNotNull(first.accept(frame(10)))
+        assertNotNull(second.accept(frame(1)))
+        second.reset()
+        assertNotNull(second.accept(frame(1)))
+        assertNull(first.accept(frame(9)))
+        assertNotNull(first.accept(frame(11)))
+    }
 }
