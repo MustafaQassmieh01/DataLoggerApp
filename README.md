@@ -62,3 +62,7 @@ Master commands: `LIST_SENSORS` returns `SENSORS` plus actual local availability
 Samples: `SAMPLE sequence channel units timestampNs receivedAtMs value[,value,value]`. Channels/units are accelerometer/m/s2, gyroscope/rad/s, light/lx. Master rejects invalid dimensions, non-finite values, negative timestamps and non-increasing sequence numbers; a successful START resets its sequence expectation. Raw incoming frames remain in private received.log, including rejected frames for diagnostics.
 
 Capture is limited to 10 Hz per available sensor. The outgoing queue holds at most 64 frames; saturation disconnects rather than growing memory. STOP clears queued frames; a write already in flight may finish before OK STOP. Disconnect, role change and leaving the foreground stop capture. Backgrounding the streaming Slave sends `EVENT STOP BACKGROUND`; return to the app and explicitly START again. Rotation disconnects. Physical Bluetooth/sensor verification remains pending.
+
+## Next: Android multi-Slave support
+
+The agreed next milestone is one Android Master controlling two Android Slaves independently, followed by acknowledged commands, group control and recording/export. See [the architecture and command protocol roadmap](docs/android-multi-slave-plan.md) for the proposed protocol v2 and acceptance checks. This is planned work; the current implementation still supports one connection and protocol v1.
