@@ -9,7 +9,7 @@ The default branch previously contained only the Android starter screen. Earlier
 - Android 9+ support, with runtime Bluetooth Connect permission on Android 12+.
 - System Bluetooth enable prompt, paired devices and in-app nearby Classic Bluetooth discovery.
 - Explicit Master / Slave mode selection. Changing mode closes the old connection.
-- One Classic Bluetooth RFCOMM connection: connect as master or listen as slave.
+- Master can maintain up to two independent Classic Bluetooth RFCOMM Slave connections; Slave accepts one Master. Each peer has separate handshake, controls, readings and log file.
 - In-app pairing before connection, bond-state tracking and a 60-second wait timeout. Android keeps control of pairing confirmations.
 - Slave discoverability through a 120-second system prompt; Scan/Connect permissions on Android 12+, location for discovery on Android 9–11.
 - Discovery stops before connection and when leaving the app; receivers and pending connection intents are cleaned up on destruction. System bonds are not removed.
@@ -65,4 +65,8 @@ Capture is limited to 10 Hz per available sensor. The outgoing queue holds at mo
 
 ## Next: Android multi-Slave support
 
-The agreed next milestone is one Android Master controlling two Android Slaves independently, followed by acknowledged commands, group control and recording/export. See [the architecture and command protocol roadmap](docs/android-multi-slave-plan.md) for the proposed protocol v2 and acceptance checks. This is planned work; the current implementation still supports one connection and protocol v1.
+The agreed next milestone is one Android Master controlling two Android Slaves independently, followed by acknowledged commands, group control and recording/export. See [the architecture and command protocol roadmap](docs/android-multi-slave-plan.md) for the proposed protocol v2 and acceptance checks. The first implementation supports up to two Slave connections with protocol v1. Request IDs, sensor/rate selection, group commands and protocol v2 remain planned.
+
+### Three-phone multi-Slave check (not yet performed)
+
+Install the same APK on one Master and two Slaves. Pair both Slaves, listen on each, then connect both from Master. START each independently and verify the correct readings under each device. STOP/disconnect the second while the first continues streaming. Remove the disconnected device card and reconnect it; verify its sequence starts cleanly without affecting the first. Test Bluetooth off, role changes, a peer failing its handshake, and rotation. Rotation still closes connections. Each Master peer logs to its own private received-ADDRESS.log; these files are diagnostics, not recording sessions. The two-device cap is an initial software limit, not a verified hardware capacity. Build and physical verification of this change are pending.
