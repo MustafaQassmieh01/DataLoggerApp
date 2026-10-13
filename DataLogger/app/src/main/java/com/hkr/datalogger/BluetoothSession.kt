@@ -23,7 +23,8 @@ import java.util.concurrent.RejectedExecutionException
 @SuppressLint("MissingPermission")
 class BluetoothSession(context: Context, private val adapter: BluetoothAdapter,
                        private val onStatus: (String, Boolean) -> Unit,
-                       private val onLine: (String) -> Unit) {
+                       private val onLine: (String) -> Unit,
+                       private val logFileName: String = "received.log") {
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
@@ -100,7 +101,7 @@ class BluetoothSession(context: Context, private val adapter: BluetoothAdapter,
             val text = framer.accept(byte)
             if (text != null) {
                 // File I/O stays on the worker, never the UI thread.
-                appContext.openFileOutput("received.log", Context.MODE_APPEND).use {
+                appContext.openFileOutput(logFileName, Context.MODE_APPEND).use {
                     it.write("${System.currentTimeMillis()}\t$text\n".toByteArray(Charsets.UTF_8))
                 }
                 main.post { if (synchronized(lock) { !closed && generation == id }) onLine(text) }
