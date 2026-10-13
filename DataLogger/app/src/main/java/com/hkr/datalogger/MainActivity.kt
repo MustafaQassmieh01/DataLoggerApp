@@ -37,6 +37,16 @@ class MainActivity : ComponentActivity() {
     private var devices by mutableStateOf<List<Pair<String, String>>>(emptyList())
     private val lines = mutableStateListOf<String>()
     private var session: BluetoothSession? = null
+    private class Peer(val address: String, val name: String) {
+        var status by mutableStateOf("Connecting…")
+        var connected by mutableStateOf(false)
+        var protocolReady by mutableStateOf(false)
+        val samples = mutableStateMapOf<String, SensorSample>()
+        val validator = RemoteSampleValidator()
+        lateinit var session: BluetoothSession
+        lateinit var timeout: Runnable
+    }
+    private val peers = mutableStateMapOf<String, Peer>()
     private var role by mutableStateOf("MASTER")
     private var discovering by mutableStateOf(false)
     private var pendingAddress by mutableStateOf<String?>(null)
@@ -73,6 +83,7 @@ class MainActivity : ComponentActivity() {
                 BluetoothAdapter.ACTION_DISCOVERY_FINISHED -> discovering = false
                 BluetoothAdapter.ACTION_STATE_CHANGED -> {
                     if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1) != BluetoothAdapter.STATE_ON) {
+                        closePeers()
                         cancelPending()
                         ready = false
                         connected = false
@@ -138,11 +149,13 @@ class MainActivity : ComponentActivity() {
                             listOf("MASTER", "SLAVE").forEach { choice ->
                                 OutlinedButton(onClick = {
                                     if (role != choice) {
+                                        closePeers()
                                         stopSensors()
                                         cancelPending()
                                         stopDiscovery()
                                         session?.disconnect()
                                         connected = false
+                                        sensorSamples.clear()
                                         lines.clear()
                                         command = ""
                                         role = choice
@@ -160,10 +173,10 @@ class MainActivity : ComponentActivity() {
                             OutlinedButton(onClick = { makeDiscoverable() }, enabled = ready) { Text("Make discoverable (120 seconds)") }
                             Button(onClick = { session?.listen() }, enabled = ready && !connected) { Text("Listen for master") }
                         } else {
-                            Button(onClick = { discover() }, enabled = ready && !connected && pendingAddress == null && !discovering) { Text("Find nearby devices") }
+                            Button(onClick = { discover() }, enabled = ready && pendingAddress == null && !discovering) { Text("Find nearby devices") }
                             if (discovering) OutlinedButton(onClick = { stopDiscovery() }) { Text("Stop discovery") }
                             devices.forEach { (name, address) ->
-                                OutlinedButton(onClick = { pairAndConnect(address) }, enabled = ready && !connected && pendingAddress == null) {
+                                OutlinedButton(onClick = { pairAndConnect(address) }, enabled = ready && pendingAddress == null && !peers.containsKey(address)) {
                                     Text("Pair / connect to $name\n$address")
                                 }
                             }
@@ -186,17 +199,23 @@ class MainActivity : ComponentActivity() {
                             Text("Master START/STOP controls Bluetooth streaming while this app is foregrounded.")
                         }
                         if (role == "MASTER") {
-                            Text(if (protocolReady) "Slave protocol ready" else "Waiting for role handshake")
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                listOf("LIST_SENSORS", "START", "STOP").forEach { cmd ->
-                                    Button(onClick = { session?.send(cmd) }, enabled = connected && protocolReady) { Text(cmd) }
+                            Text("Slaves (${peers.size}/2)", style = MaterialTheme.typography.titleMedium)
+                            peers.values.toList().forEach { peer ->
+                                Text("${peer.name} • ${peer.address}", style = MaterialTheme.typography.titleMedium)
+                                Text(peer.status)
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    listOf("LIST_SENSORS", "START", "STOP").forEach { cmd ->
+                                        Button(onClick = { peer.session.send(cmd) },
+                                            enabled = peer.connected && peer.protocolReady) { Text(cmd) }
+                                    }
                                 }
-                            }
-                            sensorSamples.values.sortedBy { it.channel }.forEach { sample ->
-                                Text("${sample.channel}: ${sample.values.joinToString()} ${sample.units} • #${sample.sequence}")
+                                peer.samples.values.sortedBy { it.channel }.forEach { sample ->
+                                    Text("${sample.channel}: ${sample.values.joinToString()} ${sample.units} • #${sample.sequence}")
+                                }
+                                OutlinedButton(onClick = { removePeer(peer.address) }) { Text("Disconnect ${peer.name}") }
                             }
                         }
-                        OutlinedButton(onClick = { stopSensors(); cancelPending(); stopDiscovery(); session?.disconnect() }, enabled = session != null) { Text("Disconnect / stop listening") }
+                        OutlinedButton(onClick = { closePeers(); stopSensors(); cancelPending(); stopDiscovery(); session?.disconnect() }, enabled = session != null) { Text("Disconnect all / stop listening") }
                         OutlinedTextField(value = command, onValueChange = { command = it }, label = { Text("ASCII command") }, singleLine = true)
                         Button(onClick = {
                             try { session?.send(command); command = "" }
@@ -269,7 +288,7 @@ class MainActivity : ComponentActivity() {
                 else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
             return
         }
-        if (!ready || connected || role != "MASTER") return
+        if (!ready || role != "MASTER") return
         stopDiscovery()
         devices = adapter?.bondedDevices.orEmpty().map { (it.name ?: "Unnamed device") to it.address }
         discovering = adapter?.startDiscovery() == true
@@ -289,7 +308,7 @@ class MainActivity : ComponentActivity() {
 
     @SuppressLint("MissingPermission")
     private fun pairAndConnect(address: String) {
-        if (!allowed() || !ready || role != "MASTER" || connected || pendingAddress != null) return
+        if (!allowed() || !ready || role != "MASTER" || pendingAddress != null) return
         stopDiscovery()
         val device = adapter?.getRemoteDevice(address) ?: return
         if (device.bondState == BluetoothDevice.BOND_BONDED) { connectBonded(device); return }
@@ -306,8 +325,74 @@ class MainActivity : ComponentActivity() {
     private fun connectBonded(device: BluetoothDevice) {
         if (!allowed() || device.bondState != BluetoothDevice.BOND_BONDED) return
         stopDiscovery()
-        session?.connect(device.address)
+        if (peers.containsKey(device.address)) return
+        if (peers.size >= 2) { status = "Two-Slave limit reached; disconnect a Slave first"; return }
+        val peer = Peer(device.address, device.name ?: "Unnamed Slave")
+        peer.timeout = Runnable {
+            if (peers[peer.address] === peer && !peer.protocolReady) {
+                peer.session.disconnect()
+                peer.status = "Connection or handshake timed out; disconnect and retry"
+            }
+        }
+        peer.session = BluetoothSession(this, adapter ?: return, { message, isConnected ->
+            if (peers[peer.address] === peer) {
+                peer.status = message
+                peer.connected = isConnected
+                peer.protocolReady = false
+                peer.samples.clear()
+                peer.validator.reset()
+                main.removeCallbacks(peer.timeout)
+                if (isConnected) {
+                    peer.session.send("HELLO 1 MASTER")
+                    main.postDelayed(peer.timeout, 10_000)
+                } else if (message == "Connecting…") {
+                    main.postDelayed(peer.timeout, 30_000)
+                }
+            }
+        }, { line ->
+            if (peers[peer.address] === peer) handlePeerLine(peer, line)
+        }, "received-${device.address.replace(":", "")}.log")
+        peers[peer.address] = peer
+        peer.session.connect(device.address)
+        main.postDelayed(peer.timeout, 30_000)
     }
+
+    private fun handlePeerLine(peer: Peer, line: String) {
+        if (!peer.connected) return
+        if (line.startsWith("HELLO")) {
+            if (line != "HELLO 1 SLAVE" || peer.protocolReady) {
+                peer.session.disconnect()
+                return
+            }
+            peer.protocolReady = true
+            peer.status = "Slave ready"
+            main.removeCallbacks(peer.timeout)
+            return
+        }
+        if (!peer.protocolReady) { peer.session.disconnect(); return }
+        when {
+            line.startsWith("SAMPLE") -> {
+                val sample = peer.validator.accept(line)
+                if (sample == null) peer.status = "Rejected invalid sensor sample"
+                else peer.samples[sample.channel] = sample
+            }
+            line == "OK START" -> { peer.validator.reset(); peer.status = "Streaming" }
+            line == "OK STOP" -> { peer.samples.clear(); peer.status = "Stopped" }
+            line == "EVENT STOP BACKGROUND" -> { peer.samples.clear(); peer.status = "Slave stopped in background" }
+            else -> peer.status = line
+        }
+        lines.add("${peer.name} [${peer.address}]: $line")
+        if (lines.size > 100) lines.removeAt(0)
+    }
+
+    private fun removePeer(address: String) {
+        val peer = peers.remove(address) ?: return
+        main.removeCallbacks(peer.timeout)
+        peer.session.close()
+        peer.samples.clear()
+    }
+
+    private fun closePeers() { peers.keys.toList().forEach { removePeer(it) } }
 
     @SuppressLint("MissingPermission")
     private fun makeDiscoverable() {
@@ -393,6 +478,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        closePeers()
         stopSensors()
         cancelPending()
         main.removeCallbacks(handshakeTimeout)
