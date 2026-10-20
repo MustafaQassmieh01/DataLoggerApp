@@ -70,3 +70,29 @@ The agreed next milestone is one Android Master controlling two Android Slaves i
 ### Three-phone multi-Slave check (not yet performed)
 
 Install the same APK on one Master and two Slaves. Pair both Slaves, listen on each, then connect both from Master. START each independently and verify the correct readings under each device. STOP/disconnect the second while the first continues streaming. Remove the disconnected device card and reconnect it; verify its sequence starts cleanly without affecting the first. Test Bluetooth off, role changes, a peer failing its handshake, and rotation. Rotation still closes connections. Each Master peer logs to its own private received-ADDRESS.log; these files are diagnostics, not recording sessions. The two-device cap is an initial software limit, not a verified hardware capacity. Build and physical verification of this change are pending.
+
+## Role dashboards and sharing
+
+Master has a fleet overview, independent station cards, live channel readings, Start/Stop controls,
+capability lookup, pairing/discovery and disconnect controls. Slave has its own connection state,
+sensor availability, formatted local readings, capture/transmission state and a Master instruction card.
+Local preview controls are available when disconnected; a connected Slave can disconnect to end participation.
+Light and dark themes use a consistent teal/slate palette. There are no charts or recording/export controls yet.
+
+Slave receives no fleet roster or other-Slave telemetry. Master may explicitly send a per-device instruction
+using `SHARE text` (1–160 printable ASCII characters); Slave acknowledges `OK SHARE`.
+`CLEAR_SHARED` revokes it and receives `OK CLEAR_SHARED`. Invalid text returns
+`ERROR INVALID_SHARED_TEXT`. These commands are accepted only after the existing Master role handshake.
+Instruction display state clears on disconnect or role change; diagnostic logs can retain received commands.
+Revocation updates the live card; it is not deletion from diagnostic history.
+This is a narrow sharing feature, not a general permission system or cryptographic authorization.
+Android pairing and the role handshake remain the connection boundary. Existing protocol-v1 builds without
+this extension respond UNKNOWN_COMMAND, visible in the Master's device status.
+
+UI/device checklist (pending):
+- Check light/dark themes, large font sizes, scrolling and narrow screens on both roles.
+- Connect two Slaves and verify each card's readings and Start/Stop target the correct device.
+- Share different instructions to A and B; verify neither sees the other's instruction or sensor readings.
+- Revoke A's instruction while B's remains; disconnect/reconnect A and verify its card is empty.
+- Test empty/invalid instructions, unsupported older peers, missing sensors and background capture stops.
+- Confirm Slave has no fleet roster, remote-device controls or raw command console.
