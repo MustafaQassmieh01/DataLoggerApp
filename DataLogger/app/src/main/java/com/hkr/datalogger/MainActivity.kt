@@ -62,7 +62,8 @@ class MainActivity : ComponentActivity() {
     private var sensorAvailability by mutableStateOf<List<String>>(emptyList())
     private val sensorSamples = mutableStateMapOf<String, SensorSample>()
     private var protocolReady by mutableStateOf(false)
-    private var streaming = false
+    private var streaming by mutableStateOf(false)
+    private var sharedInstruction by mutableStateOf("")
     private var foreground = false
     private val remoteSamples = RemoteSampleValidator()
     private val handshakeTimeout = Runnable {
@@ -135,95 +136,40 @@ class MainActivity : ComponentActivity() {
         sensorAvailability = sensorCapture.availability()
         enableEdgeToEdge()
         setContent {
-            var command by rememberSaveable { mutableStateOf("") }
-
             DataLoggerTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
-                    Column(Modifier.padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Data Logger", style = MaterialTheme.typography.headlineMedium)
-                        Text(status)
-                        Button(onClick = { prepare() }) { Text("Enable / refresh Bluetooth") }
-                        Text("Mode: $role", style = MaterialTheme.typography.titleMedium)
+                Scaffold { padding ->
+                    Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text("FIELD / DATA LOGGER", style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary)
+                        Text(if (role == "MASTER") "Control room" else "My sensor station",
+                            style = MaterialTheme.typography.headlineLarge)
+                        Text(if (role == "MASTER") "Your devices. One clear view." else "Local readings and instructions from your Master.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("MASTER", "SLAVE").forEach { choice ->
-                                OutlinedButton(onClick = {
+                                FilterChip(selected = role == choice, onClick = {
                                     if (role != choice) {
-                                        closePeers()
-                                        stopSensors()
-                                        cancelPending()
-                                        stopDiscovery()
-                                        session?.disconnect()
-                                        connected = false
-                                        sensorSamples.clear()
-                                        lines.clear()
-                                        command = ""
-                                        role = choice
+                                        closePeers(); stopSensors(); cancelPending(); stopDiscovery()
+                                        session?.disconnect(); connected = false; protocolReady = false
+                                        sensorSamples.clear(); lines.clear(); sharedInstruction = ""; role = choice
                                     }
-                                }, enabled = role != choice) { Text(choice) }
+                                }, label = { Text(choice) })
                             }
                         }
-                        Text(if (role == "MASTER") "Master connects to a paired slave and sends commands."
-                             else "Slave listens for the master and can preview local sensors.")
-                        OutlinedButton(onClick = { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) {
-                            Text("Open Bluetooth pairing settings")
-                        }
-                        Text("Keep both phones nearby. Android will ask you to confirm pairing.")
-                        if (role == "SLAVE") {
-                            OutlinedButton(onClick = { makeDiscoverable() }, enabled = ready) { Text("Make discoverable (120 seconds)") }
-                            Button(onClick = { session?.listen() }, enabled = ready && !connected) { Text("Listen for master") }
-                        } else {
-                            Button(onClick = { discover() }, enabled = ready && pendingAddress == null && !discovering) { Text("Find nearby devices") }
-                            if (discovering) OutlinedButton(onClick = { stopDiscovery() }) { Text("Stop discovery") }
-                            devices.forEach { (name, address) ->
-                                OutlinedButton(onClick = { pairAndConnect(address) }, enabled = ready && pendingAddress == null && !peers.containsKey(address)) {
-                                    Text("Pair / connect to $name\n$address")
-                                }
+                        DashboardPanel("Bluetooth", if (ready) "AVAILABLE" else "SETUP NEEDED") {
+                            Text(status, style = MaterialTheme.typography.bodyMedium)
+                            OutlinedButton(onClick = { prepare() }) { Text("Enable / refresh") }
+                            TextButton(onClick = { startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }) {
+                                Text("Pairing settings")
                             }
                         }
-                        if (role == "SLAVE") {
-                            Text("Local sensor preview", style = MaterialTheme.typography.titleMedium)
-                            sensorAvailability.forEach { Text(it) }
-                            Text(sensorStatus)
-                            Button(onClick = {
-                                sensorSamples.clear()
-                                val registered = sensorCapture.start()
-                                capturing = sensorCapture.running
-                                sensorStatus = if (capturing) "Previewing: ${registered.joinToString()} (up to 10 Hz per sensor)"
-                                    else "No sensor listeners could be registered"
-                            }, enabled = !capturing && !streaming) { Text("Start sensor preview") }
-                            OutlinedButton(onClick = { stopSensors() }, enabled = capturing) { Text("Stop sensor preview") }
-                            sensorSamples.values.sortedBy { it.channel }.forEach { sample ->
-                                Text("${sample.channel}: ${sample.values.joinToString()} ${sample.units} • #${sample.sequence}")
-                            }
-                            Text("Master START/STOP controls Bluetooth streaming while this app is foregrounded.")
-                        }
-                        if (role == "MASTER") {
-                            Text("Slaves (${peers.size}/2)", style = MaterialTheme.typography.titleMedium)
-                            peers.values.toList().forEach { peer ->
-                                Text("${peer.name} • ${peer.address}", style = MaterialTheme.typography.titleMedium)
-                                Text(peer.status)
-                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                    listOf("LIST_SENSORS", "START", "STOP").forEach { cmd ->
-                                        Button(onClick = { peer.session.send(cmd) },
-                                            enabled = peer.connected && peer.protocolReady) { Text(cmd) }
-                                    }
-                                }
-                                peer.samples.values.sortedBy { it.channel }.forEach { sample ->
-                                    Text("${sample.channel}: ${sample.values.joinToString()} ${sample.units} • #${sample.sequence}")
-                                }
-                                OutlinedButton(onClick = { removePeer(peer.address) }) { Text("Disconnect ${peer.name}") }
-                            }
-                        }
-                        OutlinedButton(onClick = { closePeers(); stopSensors(); cancelPending(); stopDiscovery(); session?.disconnect() }, enabled = session != null) { Text("Disconnect all / stop listening") }
-                        OutlinedTextField(value = command, onValueChange = { command = it }, label = { Text("ASCII command") }, singleLine = true)
-                        Button(onClick = {
-                            try { session?.send(command); command = "" }
-                            catch (e: IllegalArgumentException) { status = e.message ?: "Invalid command" }
-                        }, enabled = connected && command.isNotBlank()) { Text("Send") }
-                        Text("Received data (latest 100 lines)", style = MaterialTheme.typography.titleMedium)
-                        Text("Incoming newline-delimited ASCII is saved to the app's private received.log file.")
-                        lines.forEach { Text(it) }
+                        if (role == "MASTER") MasterDashboard() else SlaveDashboard()
+                        TextButton(onClick = {
+                            closePeers(); stopSensors(); cancelPending(); stopDiscovery(); session?.disconnect()
+                        }) { Text(if (role == "MASTER") "Disconnect all devices" else "Disconnect / stop listening") }
+                        Text("Capture runs while the Slave app is in the foreground. Rotating the screen closes connections.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -237,6 +183,132 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.RECEIVER_EXPORTED)
         receiverRegistered = true
         prepare()
+    }
+
+    @Composable
+    private fun MasterDashboard() {
+        DashboardPanel("Fleet overview", "${peers.values.count { it.protocolReady }} / 2 READY") {
+            Text("Each station has independent controls and readings.")
+            Text("Connecting another device does not stop an existing station.",
+                style = MaterialTheme.typography.bodySmall)
+        }
+        peers.values.toList().forEach { peer ->
+            key(peer.address) {
+                var note by rememberSaveable(peer.address) { mutableStateOf("") }
+                DashboardPanel(peer.name, if (peer.protocolReady) "ONLINE" else "NOT READY") {
+                    Text(peer.address, style = MaterialTheme.typography.labelMedium)
+                    Text(peer.status, color = MaterialTheme.colorScheme.primary)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { peer.session.send("START") }, enabled = peer.protocolReady) { Text("Start") }
+                        OutlinedButton(onClick = { peer.session.send("STOP") }, enabled = peer.protocolReady) { Text("Stop") }
+                    }
+                    TextButton(onClick = { peer.session.send("LIST_SENSORS") }, enabled = peer.protocolReady) {
+                        Text("Check available sensors")
+                    }
+                    if (peer.samples.isEmpty()) Text("No live samples. Start this station to see readings.")
+                    peer.samples.values.sortedBy { it.channel }.forEach { SensorReading(it) }
+                    HorizontalDivider()
+                    Text("Share with this Slave", style = MaterialTheme.typography.titleSmall)
+                    Text("Only this instruction is sent. Other devices and fleet data stay on Master.",
+                        style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(value = note, onValueChange = { value ->
+                        note = value.filter { it.code in 32..126 }.take(160)
+                    }, label = { Text("Instruction") }, supportingText = { Text("${note.length}/160") },
+                        modifier = Modifier.fillMaxWidth())
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { peer.session.send("SHARE ${note.trim()}") },
+                            enabled = peer.protocolReady && note.isNotBlank()) { Text("Share") }
+                        OutlinedButton(onClick = { peer.session.send("CLEAR_SHARED") },
+                            enabled = peer.protocolReady) { Text("Revoke") }
+                    }
+                    TextButton(onClick = { removePeer(peer.address) }) { Text("Disconnect station") }
+                }
+            }
+        }
+        DashboardPanel("Add a station", if (discovering) "SEARCHING" else "PAIR & CONNECT") {
+            Text("Put the Slave in listening mode and make it discoverable. Confirm Android pairing on both phones.")
+            Button(onClick = { discover() },
+                enabled = ready && pendingAddress == null && !discovering && peers.size < 2) {
+                Text("Find nearby devices")
+            }
+            if (discovering) TextButton(onClick = { stopDiscovery() }) { Text("Stop search") }
+            if (pendingAddress != null) Text("Waiting for Android pairing confirmation…")
+            devices.filterNot { peers.containsKey(it.second) }.forEach { (name, address) ->
+                OutlinedButton(onClick = { pairAndConnect(address) },
+                    enabled = ready && pendingAddress == null && peers.size < 2, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(name)
+                        Text(address, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+            if (devices.isEmpty()) Text("No stations found yet. Start a search or refresh paired devices.")
+        }
+    }
+
+    @Composable
+    private fun SlaveDashboard() {
+        DashboardPanel("This device", when {
+            streaming -> "TRANSMITTING"
+            protocolReady -> "MASTER CONNECTED"
+            connected -> "VERIFYING MASTER"
+            else -> "OFFLINE"
+        }) {
+            Text(if (streaming) "Your sensor readings are being sent to Master."
+                else if (protocolReady) "Ready. Master controls when transmission starts."
+                else "Listen for a Master to join its session.")
+            Button(onClick = { session?.listen() }, enabled = ready && !connected) { Text("Listen for Master") }
+            OutlinedButton(onClick = { makeDiscoverable() }, enabled = ready && !connected) {
+                Text("Make discoverable · 120s")
+            }
+        }
+        DashboardPanel("From your Master", if (sharedInstruction.isEmpty()) "NOTHING SHARED" else "SHARED INSTRUCTION") {
+            Text(sharedInstruction.ifEmpty { "Master has not shared an instruction with this device." })
+            Text("You can see your own readings and explicitly shared instructions. Other Slaves and fleet data are unavailable.",
+                style = MaterialTheme.typography.bodySmall)
+        }
+        DashboardPanel("My sensors", if (streaming) "LIVE TO MASTER" else if (capturing) "LOCAL PREVIEW" else "IDLE") {
+            sensorAvailability.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
+            HorizontalDivider()
+            Text(sensorStatus)
+            if (sensorSamples.isEmpty()) Text("No readings yet. Preview locally or wait for Master to start.")
+            sensorSamples.values.sortedBy { it.channel }.forEach { SensorReading(it) }
+            if (!connected) {
+                Button(onClick = {
+                    sensorSamples.clear()
+                    val registered = sensorCapture.start()
+                    capturing = sensorCapture.running
+                    sensorStatus = if (capturing) "Local preview · ${registered.joinToString()}" else "No sensors available"
+                }, enabled = !capturing) { Text("Preview my sensors") }
+                OutlinedButton(onClick = { stopSensors() }, enabled = capturing) { Text("Stop preview") }
+            } else Text("Transmission is managed by Master. Disconnect locally to end participation.",
+                style = MaterialTheme.typography.bodySmall)
+        }
+    }
+
+    @Composable
+    private fun DashboardPanel(title: String, badge: String, content: @Composable ColumnScope.() -> Unit) {
+        Card(modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(badge, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text(title, style = MaterialTheme.typography.titleLarge)
+                content()
+            }
+        }
+    }
+
+    @Composable
+    private fun SensorReading(sample: SensorSample) {
+        Surface(color = MaterialTheme.colorScheme.surface, shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(sample.channel.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.labelLarge)
+                Text(sample.values.joinToString("  /  ") { String.format(java.util.Locale.US, "%.2f", it) },
+                    style = MaterialTheme.typography.titleLarge)
+                Text("${sample.units} · sample #${sample.sequence}", style = MaterialTheme.typography.labelSmall)
+            }
+        }
     }
 
     private fun allowed() = Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
@@ -263,6 +335,8 @@ class MainActivity : ComponentActivity() {
                 status = message; connected = isConnected
                 main.removeCallbacks(handshakeTimeout)
                 protocolReady = false
+                sharedInstruction = ""
+                sensorSamples.clear()
                 if (isConnected) {
                     remoteSamples.reset()
                     session?.send("HELLO 1 $role")
@@ -437,6 +511,21 @@ class MainActivity : ComponentActivity() {
                 line == "EVENT STOP BACKGROUND" -> status = "Slave stopped streaming in background"
             }
             return
+        }
+        when {
+            line == "CLEAR_SHARED" -> {
+                sharedInstruction = ""
+                session?.send("OK CLEAR_SHARED")
+                return
+            }
+            line.startsWith("SHARE ") -> {
+                val text = line.removePrefix("SHARE ")
+                if (text.length in 1..160 && text.all { it.code in 32..126 }) {
+                    sharedInstruction = text
+                    session?.send("OK SHARE")
+                } else session?.send("ERROR INVALID_SHARED_TEXT")
+                return
+            }
         }
         when (line) {
             "LIST_SENSORS" -> session?.send("SENSORS " + sensorCapture.availability().joinToString(";"))
